@@ -18,7 +18,7 @@ npm run build
 npm run validate
 ```
 
-测试目前38项通过；模型及扶摇授权成功响应的测试使用mock，不冒充真实授权集成测试。构建生成单文件Cloudflare Worker ESM；部署配置见 `.openai/hosting.json`。
+测试目前39项通过；模型及扶摇授权成功响应的测试使用mock，不冒充真实授权集成测试。构建生成单文件Cloudflare Worker ESM；部署配置见 `.openai/hosting.json`。
 
 ## 一次完整研究
 
@@ -105,7 +105,7 @@ npm run validate
 - `src/model.js`：固定供应商端点、JSON输出、白名单规划、真实连接测试。
 - `src/server.js`：研究主链路、权限与HTTP接口。
 - `src/index.html` / `src/enhancements.js`：响应式界面与深度研究分支。
-- `tests/`：38项自动化测试；`docs/`：提交说明材料。
+- `tests/`：39项自动化测试；`docs/`：提交说明材料。
 
 ## 已知边界和未做事项
 

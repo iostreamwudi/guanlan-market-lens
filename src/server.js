@@ -2,7 +2,7 @@ import { INDICES, validateBars, demoBars, buildReport, validateAIClaims, boundar
 import { loadMarketSnapshot, loadLimitStructure, loadIndustries, loadOfficialEvents, historicalWindows, applySupplement } from './supplement.js';
 import { requestModel, planWithModel, testModelConnection, MODEL_PROVIDERS } from './model.js';
 export async function fetchJSON(url, headers = {}, fetcher = fetch) {
-  const response = await fetcher(url, { headers, signal: AbortSignal.timeout(12000) });
+  const response = await fetcher(url, { headers: { 'User-Agent': 'MarketLens/1.1 (+https://market-lens-ashare.freshanole18.chatgpt.site)', ...headers }, signal: AbortSignal.timeout(12000) });
   if (!response.ok) throw new Error(`上游HTTP ${response.status}`);
   const text = await response.text();
   if (text.length > 2000000) throw new Error('响应过大');

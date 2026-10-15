@@ -6,10 +6,14 @@ const sum = rows => rows.reduce((n, r) => n + r.turnover, 0);
 const latest = rows => Math.max(...rows.map(r => r.timestamp));
 const cleanText = s => String(s || '').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, '').replace(/<[^>]+>/g, ' ').replace(/&nbsp;|&#160;/g, ' ').replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 export async function mapLimited(items, count, fn) {
-  const out = new Array(items.length); let cursor = 0;
+  const out = new Array(items.length); let cursor = 0, failure = null;
   await Promise.all(Array.from({ length: Math.min(count, items.length) }, async () => {
-    while (cursor < items.length) { const i = cursor++; out[i] = await fn(items[i], i); }
+    while (cursor < items.length && !failure) {
+      const i = cursor++;
+      try { out[i] = await fn(items[i], i); } catch (e) { failure = e; }
+    }
   }));
+  if (failure) throw failure;
   return out;
 }
 export async function collectPages(getPage, idOf, maxPages = 80) {
@@ -99,19 +103,19 @@ export async function loadOfficialEvents(jsonGet, fetcher = fetch, now = new Dat
   if (!Array.isArray(raw)) throw new Error('官方政策索引结构变化');
   const since = chinaDate(now.getTime() - 30 * 86400000), today = chinaDate(now.getTime());
   const selected = raw.filter(r => typeof r.TITLE === 'string' && /生产力|经济|财政|金融|货币|资本|证券|消费|科技|投资|产业/.test(r.TITLE) && /^https:\/\/www\.gov\.cn\//.test(r.URL) && /^\d{4}-\d{2}-\d{2}$/.test(r.DOCRELPUBTIME) && r.DOCRELPUBTIME >= since && r.DOCRELPUBTIME <= today).slice(0, 3);
-  const events = [];
-  for (const item of selected) {
+  const extracted = await mapLimited(selected, 3, async item => {
     try {
-      const response = await fetcher(item.URL, { signal: AbortSignal.timeout(12000), redirect: 'error' });
-      if (!response.ok) continue;
+      const response = await fetcher(item.URL, { headers: { 'User-Agent': 'MarketLens/1.1 (+https://market-lens-ashare.freshanole18.chatgpt.site)' }, signal: AbortSignal.timeout(12000), redirect: 'error' });
+      if (!response.ok) return null;
       const html = await response.text();
-      if (html.length > 2000000) continue;
+      if (html.length > 2000000) return null;
       const body = /id=["']UCAP-CONTENT["'][^>]*>([\s\S]*?)(?:<\/div>|<!--)/i.exec(html)?.[1];
       const text = cleanText(body);
-      if (text.length < 30) continue;
-      events.push({ title: cleanText(item.TITLE), date: item.DOCRELPUBTIME, url: item.URL, excerpt: text.slice(0, 120), source: '中国政府网政策原文', fetchedAt: now.toISOString() });
-    } catch { /* An unreadable article is not a verified event. */ }
-  }
+      if (text.length < 30) return null;
+      return { title: cleanText(item.TITLE), date: item.DOCRELPUBTIME, url: item.URL, excerpt: text.slice(0, 120), source: '中国政府网政策原文', fetchedAt: now.toISOString() };
+    } catch { return null; }
+  });
+  const events = extracted.filter(Boolean);
   if (!events.length) throw new Error('近30日无可核验政策原文，事件维度保持缺失');
   return { events, source: '中国政府网政策索引与原文', url };
 }

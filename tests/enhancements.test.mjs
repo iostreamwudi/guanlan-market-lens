@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collectPages, loadMarketSnapshot, loadLimitStructure, loadIndustries, loadOfficialEvents, historicalWindows, applySupplement } from '../src/supplement.js';
+import { mapLimited, collectPages, loadMarketSnapshot, loadLimitStructure, loadIndustries, loadOfficialEvents, historicalWindows, applySupplement } from '../src/supplement.js';
 import { requestModel, planWithModel, testModelConnection } from '../src/model.js';
 import { research } from '../src/server.js';
 import { demoBars } from '../src/engine.js';
@@ -94,4 +94,9 @@ test('模型规划只能选择白名单工具，不能指定任意取数能力',
 test('公开访客不能未经口令使用部署者模型Key',async()=>{
   const r=await research(base,{OPENAI_API_KEY:'fixture-server-key',RESEARCH_ACCESS_TOKEN:'fixture-owner-token'},noNetwork,now);
   assert.equal(r.ai.status,'未启用');assert.ok(!JSON.stringify(r).includes('fixture-server-key'));
+});
+test('分页中途失败后停止派发新请求，避免继续消耗供应商额度',async()=>{
+  let count=0;
+  await assert.rejects(mapLimited(Array.from({length:20},(_,i)=>i),2,async i=>{count++;if(i===0)throw new Error('fixture_failure');return i}),/fixture_failure/);
+  assert.ok(count<=3);
 });

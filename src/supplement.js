@@ -97,27 +97,88 @@ export async function loadIndustries(jsonGet, now = new Date()) {
   if (!rows.length) throw new Error('无有效同日行业样本');
   return { rows, date, total: all.total, source: '东方财富公开行业板块', url: all.pages[0].url, pages: all.pages };
 }
+const OFFICIAL_ORIGINS = new Set(['https://www.gov.cn', 'https://www.sse.com.cn']);
+async function officialHTML(url, fetcher) {
+  const origin = new URL(url).origin;
+  if (!OFFICIAL_ORIGINS.has(origin)) throw new Error('官方原文域名不在白名单');
+  let current = url;
+  for (let step = 0; step <= 2; step++) {
+    const response = await fetcher(current, { headers: { 'User-Agent': 'MarketLens/1.2 (+https://market-lens-ashare.freshanole18.chatgpt.site)' }, signal: AbortSignal.timeout(6000), redirect: 'manual' });
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get('location');
+      if (!location || step === 2) throw new Error('官方原文重定向超过预算');
+      const target = new URL(location, current);
+      if (target.origin !== origin || target.username || target.password) throw new Error('官方原文重定向越出白名单');
+      current = target.href;
+      continue;
+    }
+    if (!response.ok) throw new Error(`官方原文HTTP ${response.status}`);
+    const html = await response.text();
+    if (html.length > 2000000) throw new Error('官方原文超过大小预算');
+    return { html, url: current };
+  }
+}
+function officialFailure(error) {
+  if (['TimeoutError', 'AbortError'].includes(error?.name)) return '请求超时或超过取证预算';
+  return /^(官方原文|官方政策|交易所|近30日)/.test(error?.message || '') ? error.message : '公开来源连接或结构异常';
+}
 export async function loadOfficialEvents(jsonGet, fetcher = fetch, now = new Date()) {
-  const url = 'https://www.gov.cn/zhengce/zuixin/ZUIXINZHENGCE.json';
-  const raw = await jsonGet(url);
-  if (!Array.isArray(raw)) throw new Error('官方政策索引结构变化');
+  const govURL = 'https://www.gov.cn/zhengce/zuixin/ZUIXINZHENGCE.json';
+  const sseURL = 'https://www.sse.com.cn/aboutus/mediacenter/hotandd/';
   const since = chinaDate(now.getTime() - 30 * 86400000), today = chinaDate(now.getTime());
-  const selected = raw.filter(r => typeof r.TITLE === 'string' && /生产力|经济|财政|金融|货币|资本|证券|消费|科技|投资|产业/.test(r.TITLE) && /^https:\/\/www\.gov\.cn\//.test(r.URL) && /^\d{4}-\d{2}-\d{2}$/.test(r.DOCRELPUBTIME) && r.DOCRELPUBTIME >= since && r.DOCRELPUBTIME <= today).slice(0, 3);
-  const extracted = await mapLimited(selected, 3, async item => {
-    try {
-      const response = await fetcher(item.URL, { headers: { 'User-Agent': 'MarketLens/1.1 (+https://market-lens-ashare.freshanole18.chatgpt.site)' }, signal: AbortSignal.timeout(12000), redirect: 'error' });
-      if (!response.ok) return null;
-      const html = await response.text();
-      if (html.length > 2000000) return null;
-      const body = /id=["']UCAP-CONTENT["'][^>]*>([\s\S]*?)(?:<\/div>|<!--)/i.exec(html)?.[1];
-      const text = cleanText(body);
-      if (text.length < 30) return null;
-      return { title: cleanText(item.TITLE), date: item.DOCRELPUBTIME, url: item.URL, excerpt: text.slice(0, 120), source: '中国政府网政策原文', fetchedAt: now.toISOString() };
-    } catch { return null; }
-  });
-  const events = extracted.filter(Boolean);
-  if (!events.length) throw new Error('近30日无可核验政策原文，事件维度保持缺失');
-  return { events, source: '中国政府网政策索引与原文', url };
+  const attempts = [];
+  const record = (source, url, status, message) => attempts.push({ source, url, status, message, checkedAt: now.toISOString() });
+  try {
+    const raw = await jsonGet(govURL);
+    if (!Array.isArray(raw)) throw new Error('官方政策索引结构变化');
+    const selected = raw.filter(r => typeof r.TITLE === 'string' && /生产力|经济|财政|金融|货币|资本|证券|消费|科技|投资|产业/.test(r.TITLE) && /^https:\/\/www\.gov\.cn\//.test(r.URL) && /^\d{4}-\d{2}-\d{2}$/.test(r.DOCRELPUBTIME) && r.DOCRELPUBTIME >= since && r.DOCRELPUBTIME <= today).slice(0, 3);
+    const extracted = await mapLimited(selected, 3, async item => {
+      try {
+        const original = await officialHTML(item.URL, fetcher);
+        const body = /id=["']UCAP-CONTENT["'][^>]*>([\s\S]*?)(?:<\/div>|<!--)/i.exec(original.html)?.[1];
+        const text = cleanText(body);
+        if (text.length < 30) throw new Error('官方原文正文未通过核验');
+        record('中国政府网原文', original.url, 'success', '正文已读取');
+        return { title: cleanText(item.TITLE), date: item.DOCRELPUBTIME, url: original.url, excerpt: text.slice(0, 120), source: '中国政府网政策原文', kind: 'policy', fetchedAt: now.toISOString() };
+      } catch (e) { record('中国政府网原文', item.URL, 'failed', officialFailure(e)); return null; }
+    });
+    const events = extracted.filter(Boolean);
+    if (events.length) return { events, source: '中国政府网政策索引与原文', url: govURL, attempts, fallback: false };
+    throw new Error('近30日无可核验中国政府网政策原文');
+  } catch (e) { record('中国政府网索引', govURL, 'failed', officialFailure(e)); }
+  // Independent official source, never a fabricated substitute for failed policy text.
+  try {
+    const index = await officialHTML(sseURL, fetcher);
+    const candidates = [];
+    for (const m of index.html.matchAll(/<dd\b[^>]*>([\s\S]*?)<\/dd>/gi)) {
+      const block = m[1], date = /<span\b[^>]*>\s*(\d{4}-\d{2}-\d{2})\s*<\/span>/i.exec(block)?.[1];
+      const a = /<a\b([^>]*)>([\s\S]*?)<\/a>/i.exec(block);
+      const href = /href=["']([^"']+)["']/i.exec(a?.[1] || '')?.[1], title = cleanText(a?.[2]);
+      if (!date || date < since || date > today || !href || !/市场|投资|资金|交易|上市|证券|监管|规则|科创|金融|信息商/.test(title)) continue;
+      const url = new URL(href, sseURL);
+      if (url.origin !== 'https://www.sse.com.cn' || !/^\/aboutus\/mediacenter\/hotandd\/c\/c_\d{8}_\d+\.shtml$/.test(url.pathname)) continue;
+      if (url.pathname.match(/c_(\d{8})_/)?.[1] !== date.replaceAll('-', '')) continue;
+      if (!candidates.some(x => x.url === url.href)) candidates.push({ title, date, url: url.href });
+    }
+    const extracted = await mapLimited(candidates.slice(0, 3), 3, async item => {
+      try {
+        const original = await officialHTML(item.url, fetcher);
+        const html = original.html;
+        const titles = [...html.matchAll(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi)].map(m => cleanText(m[1]).replace(/\s/g, ''));
+        const date = /class=["']article_opt["'][\s\S]*?<i[^>]*>\s*(\d{4}-\d{2}-\d{2})\s*<\/i>/i.exec(html)?.[1];
+        const text = cleanText(/class=["']allZoom["'][^>]*>([\s\S]*?)<\/div>/i.exec(html)?.[1]);
+        if (!titles.includes(item.title.replace(/\s/g, '')) || date !== item.date || text.length < 30) throw new Error('交易所原文标题、日期或正文核验失败');
+        record('上海证券交易所原文', original.url, 'success', '标题、发布日期和正文已核验');
+        return { ...item, url: original.url, excerpt: text.slice(0, 120), source: '上海证券交易所官方动态', kind: 'exchange_update', fetchedAt: now.toISOString() };
+      } catch (e) { record('上海证券交易所原文', item.url, 'failed', officialFailure(e)); return null; }
+    });
+    const events = extracted.filter(Boolean);
+    if (!events.length) throw new Error('近30日无可核验交易所动态原文');
+    return { events, source: '上海证券交易所热点动态与原文（备用官方来源）', url: sseURL, attempts, fallback: true };
+  } catch (e) {
+    record('上海证券交易所索引', sseURL, 'failed', officialFailure(e));
+    throw Object.assign(new Error('近30日无可核验官方原文，事件维度保持缺失'), { attempts });
+  }
 }
 export function historicalWindows(bars, days) {
   if (bars.length < days * 2 + 25) return { windows: [], note: '历史样本不足，至少需要两个不重叠区间及均线预热数据。' };
@@ -134,7 +195,7 @@ export function historicalWindows(bars, days) {
   return { windows, note: '同一指数、不重叠的等长历史观察区间；按区间变化、已实现波动和均线偏离的标准化距离排序。距离只描述样本内特征接近程度，不推演后续表现。', scale };
 }
 export function applySupplement(report, data) {
-  report.supplement = { industry: data.industry || null, events: data.events?.events || [], history: data.history || null };
+  report.supplement = { industry: data.industry || null, events: data.events?.events || [], eventSource: data.events ? { source: data.events.source, url: data.events.url, fallback: data.events.fallback || false, attempts: data.events.attempts || [] } : null, history: data.history || null };
   const add = e => { report.evidence = report.evidence.filter(x => x.id !== e.id); report.evidence.push({ ...e, status: 'available', quality: report.mode === 'demo' ? '构造样本' : '实时来源 · 时点独立列示' }); };
   const cover = (domain, note) => { const q = report.quality.find(x => x.name === domain); q.status = 'available'; q.note = note; };
   if (data.market) {
@@ -171,16 +232,16 @@ export function applySupplement(report, data) {
   }
   if (data.events) {
     const events = data.events.events;
-    add({ id: 'E11', domain: '重要事件', label: '已核验官方政策线索', value: String(events.length), unit: '条', source: data.events.source, sourceUrl: data.events.url, asOf: events.map(e => e.date).join(' / '),
-      formula: '从中国政府网近30日政策索引筛选经济/产业相关标题，并成功读取官方原文；发布日期与获取时间分别保留。仅核实事件存在，不判断市场影响和因果关系。', raw: events, interpretation: '原文与发布日期可追溯；是否被市场定价、影响哪些行业仍是不确定判断。' });
-    cover('重要事件', '已核验近30日官方政策原文；市场影响尚未证实');
+    add({ id: 'E11', domain: '重要事件', label: '已核验官方事件线索', value: String(events.length), unit: '条', source: data.events.source, sourceUrl: data.events.url, asOf: events.map(e => e.date).join(' / '),
+      formula: '优先读取近30日中国政府网经济/产业政策原文，失败时核验交易所官方动态原文；备用来源核对标题及发布日期。不把交易所动态称为宏观政策，不据此推断市场影响。发布日期与获取时间分别保留。', raw: events, interpretation: '原文与发布日期可追溯；是否被市场定价、影响哪些行业仍是不确定判断。' });
+    cover('重要事件', '已核验近30日官方事件原文；市场影响尚未证实');
   }
   if (data.history?.windows.length) {
     add({ id: 'E12', domain: '行情结构', label: '等长历史区间对照', value: String(data.history.windows.length), unit: '个区间', source: report.evidence[0].source, sourceUrl: report.evidence[0].sourceUrl, asOf: report.metric.date + ' 15:00 北京时间',
       formula: data.history.note, raw: data.history, interpretation: '只作历史特征对照，不包含未来收益、胜率或预测。' });
   }
   report.claims = report.claims.filter(c => !(c.type === '不确定' && c.text.includes('广度、资金')));
-  report.claims.push({ type: '不确定', text: '估值统一口径、资金净流入和多日宽度持续性仍不完整；' + (data.events ? '已核验政策原文不代表市场影响已证实。' : '官方政策原文当前未取得，不作事件归因。'), evidence_ids: data.market ? ['E6', 'E8'] : ['E3', 'E4'] });
+  report.claims.push({ type: '不确定', text: '估值统一口径、资金净流入和多日宽度持续性仍不完整；' + (data.events ? '已核验官方事件原文不代表市场影响已证实。' : '官方政策原文当前未取得，不作事件归因。'), evidence_ids: data.market ? ['E6', 'E8'] : ['E3', 'E4'] });
   report.coverage = report.quality.filter(q => q.status === 'available').length;
   const hasAlignedBreadth = data.market ? data.market.date === report.metric.date : report.mode === 'demo' && report.evidence.some(e => e.id === 'E6');
   report.confidence = report.stale || !hasAlignedBreadth ? '低' : report.coverage >= 4 ? '中' : '低';

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mapLimited, collectPages, loadMarketSnapshot, loadLimitStructure, loadIndustries, loadOfficialEvents, historicalWindows, applySupplement } from '../src/supplement.js';
 import { requestModel, planWithModel, testModelConnection, MODEL_TIMEOUT_MS, modelFailure } from '../src/model.js';
-import { research } from '../src/server.js';
+import { research, publicCached } from '../src/server.js';
 import { demoBars } from '../src/engine.js';
 const now = new Date('2026-10-15T08:00:00Z');
 const ts = Date.parse('2026-10-15T15:00:00+08:00');
@@ -61,6 +61,51 @@ test('官方事件只读取允许域名，并要求成功解析原文',async()=>
 });
 test('官方原文缺失或结构变化不算已核验事件',async()=>{
   await assert.rejects(loadOfficialEvents(async()=>[{TITLE:'金融政策',URL:'https://www.gov.cn/test.htm',DOCRELPUBTIME:'2026-10-14'}],async()=>new Response('<html>无正文</html>'),now),/无可核验/);
+});
+const ssePath='/aboutus/mediacenter/hotandd/c/c_20261014_12345678.shtml';
+const sseTitle='交易所举办国际投资者调研活动';
+const sseIndex=(title=sseTitle,date='2026-10-14',path=ssePath)=>`<dd><span>${date}</span><a href="${path}">${title}</a></dd>`;
+const sseArticle=(title=sseTitle,date='2026-10-14')=>`<h2>上交所APP栏目</h2><h2>${title}</h2><div class="article_opt"><i>${date}</i></div><div class="allZoom"><p>${'这是交易所官方动态测试正文，并不代表真实资金流入或政策影响。'.repeat(3)}</p></div>`;
+test('政府原文失败后切换独立官方来源，保留失败记录并核验交易所标题和日期',async()=>{
+  const seen=[];
+  const r=await loadOfficialEvents(async()=>{throw new Error('fixture primary unavailable')},async url=>{seen.push(url);return new Response(url.endsWith('/')?sseIndex()+sseIndex():sseArticle())},now);
+  assert.equal(r.fallback,true);assert.equal(r.events.length,1);assert.equal(seen.length,2);assert.equal(r.events[0].source,'上海证券交易所官方动态');
+  assert.equal(r.attempts[0].status,'failed');assert.equal(r.attempts.at(-1).status,'success');
+});
+test('备用官方原文标题或日期不匹配时拒绝，不将索引标题冒充已核验事件',async()=>{
+  for(const html of [sseArticle('不同标题'),sseArticle(sseTitle,'2026-10-13')]){
+    await assert.rejects(loadOfficialEvents(async()=>[],async url=>new Response(url.endsWith('/')?sseIndex():html),now),e=>{assert.ok(e.attempts.some(a=>a.message.includes('核验失败')));return true});
+  }
+});
+test('备用索引的外部链接、未来日期及过期条目不请求',async()=>{
+  const seen=[];
+  await assert.rejects(loadOfficialEvents(async()=>[],async url=>{seen.push(url);return new Response(sseIndex(sseTitle,'2026-10-14','https://evil.test/a')+sseIndex(sseTitle,'2026-10-16')+sseIndex(sseTitle,'2020-01-01'))},now),/无可核验/);
+  assert.equal(seen.length,1);assert.ok(seen[0].startsWith('https://www.sse.com.cn/'));
+});
+test('官方原文仅跟随同源有限重定向，跨域重定向拒绝并保留原因',async()=>{
+  const index=async()=>[{TITLE:'金融政策',URL:'https://www.gov.cn/start.htm',DOCRELPUBTIME:'2026-10-14'}];
+  const body='<div id="UCAP-CONTENT">'+('这是官方原文解析测试。'.repeat(8))+'</div>';
+  const same=await loadOfficialEvents(index,async url=>url.endsWith('start.htm')?new Response(null,{status:302,headers:{location:'/final.htm'}}):new Response(body),now);
+  assert.equal(same.events[0].url,'https://www.gov.cn/final.htm');
+  const seen=[];
+  await assert.rejects(loadOfficialEvents(index,async url=>{seen.push(url);return url.includes('gov.cn')?new Response(null,{status:302,headers:{location:'https://evil.test/a'}}):new Response('empty')},now),e=>{assert.ok(e.attempts.some(a=>a.message.includes('白名单')));return true});
+  assert.ok(seen.every(url=>!url.includes('evil.test')));
+});
+test('公开资料缓存共享成功结果并标注年龄，失败不缓存，过期重新获取',async()=>{
+  const name='fixture-cache-'+crypto.randomUUID();let count=0;
+  const fn=async()=>{count++;return{source:'fixture',value:count}};
+  const [a,b]=await Promise.all([publicCached(name,fn,true),publicCached(name,fn,true)]);
+  assert.equal(count,1);assert.equal(a.cache.status,'fresh');assert.equal(b.cache.status,'shared');assert.equal(b.value,a.value);
+  const c=await publicCached(name,fn,true);assert.equal(c.cache.status,'hit');assert.ok(c.cache.storedAt);assert.equal(c.cache.ttlSeconds,120);
+  await publicCached(name,fn,true,0);assert.equal(count,2);
+  const failedName=name+'failed';let attempts=0;
+  const fail=()=>{attempts++;throw new Error('fixture failure')};
+  await assert.rejects(publicCached(failedName,fail,true));await assert.rejects(publicCached(failedName,fail,true));assert.equal(attempts,2);
+});
+test('不允许缓存的凭证资料不读写公共缓存',async()=>{
+  let calls=0;const name='fixture-private-'+crypto.randomUUID();
+  for(let i=0;i<2;i++){const r=await publicCached(name,async()=>({value:++calls}),false);assert.equal(r.cache,undefined)}
+  assert.equal(calls,2);
 });
 test('历史区间互不重叠且不包含当前区间，不提供后续收益',()=>{
   const bars=demoBars('sh000300');const h=historicalWindows(bars,20);assert.ok(h.windows.length>0);

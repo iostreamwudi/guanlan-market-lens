@@ -446,7 +446,10 @@ export async function research(input, env = {}, fetcher = fetch, now = new Date(
   if (modelPlan) { report.plan.focus = modelPlan.value.focus; report.plan.origin = '模型规划 · 系统白名单校验'; report.plan.reason = modelPlan.value.reason; }
   else report.plan.origin = '受控规则规划';
   if (extended) {
-    const data = {}, jsonGet = (url, headers) => fetchJSON(url, headers, fetcher);
+    // Optional evidence cannot keep the primary report waiting indefinitely.
+    const dataDeadline = AbortSignal.timeout(16000);
+    const dataFetcher = (url, init = {}) => fetcher(url, { ...init, signal: init.signal ? AbortSignal.any([init.signal, dataDeadline]) : dataDeadline });
+    const data = {}, jsonGet = (url, headers) => fetchJSON(url, headers, dataFetcher);
     const perform = async (name, action) => {
       const started = Date.now();
       try { const r = await action(); logs.push({ tool: name, status: 'success', source: r.source, url: r.url, count: r.total ?? r.events?.length ?? r.windows?.length, pages: r.pages?.length, durationMs: Date.now() - started }); return r; }
@@ -456,7 +459,7 @@ export async function research(input, env = {}, fetcher = fetch, now = new Date(
       const fk = fuyaoKey;
       const marketPromise = perform('get_market_snapshot', () => publicCached('market', () => loadMarketSnapshot(mode, fk, jsonGet, now), mode === 'public' && fetcher === fetch));
       const limitsPromise = perform('get_limit_structure', () => publicCached('limits-' + report.metric.date, () => loadLimitStructure(report.metric.date, mode, fk, jsonGet), mode === 'public' && fetcher === fetch));
-      const eventPromise = perform('get_official_events', () => publicCached('events', () => loadOfficialEvents(jsonGet, fetcher, now), fetcher === fetch));
+      const eventPromise = perform('get_official_events', () => publicCached('events', () => loadOfficialEvents(jsonGet, dataFetcher, now), fetcher === fetch));
       const industryPromise = mode === 'public' && (initialFocus === '行业' || modelPlan?.value.tools.includes('industry_snapshot')) ? perform('get_industry_snapshot', () => publicCached('industry', () => loadIndustries(jsonGet, now), fetcher === fetch)) : Promise.resolve(null);
       [data.market, data.limits, data.events, data.industry] = await Promise.all([marketPromise, limitsPromise, eventPromise, industryPromise]);
     }

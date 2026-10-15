@@ -1,0 +1,9 @@
+dist/
+site.tar.gz
+.env
+.env.*
+!.env.example
+node_modules/
+.DS_Store
+.sites-runtime/
+*.log

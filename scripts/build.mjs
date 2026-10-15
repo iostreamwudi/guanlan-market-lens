@@ -1,7 +1,10 @@
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 const engine = readFileSync('src/engine.js', 'utf8');
-const server = readFileSync('src/server.js', 'utf8').replace(/^import .*from '\.\/engine.js';\n/, '');
-const html = readFileSync('src/index.html', 'utf8');
+const stripImports = s => s.replace(/^import .*;\n/gm, '');
+const supplement = stripImports(readFileSync('src/supplement.js', 'utf8'));
+const model = readFileSync('src/model.js', 'utf8');
+const server = stripImports(readFileSync('src/server.js', 'utf8'));
+const html = readFileSync('src/index.html', 'utf8').replace('<!-- EXTENSION -->', '<script>' + readFileSync('src/enhancements.js', 'utf8') + '</script>');
 mkdirSync('worker', { recursive: true });
-writeFileSync('worker/index.js', engine + '\n' + server + '\nexport default makeHandler(' + JSON.stringify(html) + ');\n');
+writeFileSync('worker/index.js', engine + '\n' + supplement + '\n' + model + '\n' + server + '\nexport default makeHandler(' + JSON.stringify(html) + ');\n');
 console.log('Bundled evidence engine, server and interface');

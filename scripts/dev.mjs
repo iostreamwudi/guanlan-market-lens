@@ -1,7 +1,8 @@
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { makeHandler } from '../src/server.js';
-const handler = makeHandler(readFileSync('src/index.html', 'utf8'));
+const html = readFileSync('src/index.html', 'utf8').replace('<!-- EXTENSION -->', '<script>' + readFileSync('src/enhancements.js', 'utf8') + '</script>');
+const handler = makeHandler(html);
 const server = http.createServer(async (req, res) => {
   try {
     const chunks = []; for await (const c of req) chunks.push(c);

@@ -108,10 +108,9 @@ export function buildReport({ index, days, mode, scenario, datasets, logs, quest
 export function validateAIClaims(claims, report) {
   if (!Array.isArray(claims) || claims.length < 1 || claims.length > 5) throw new Error('模型输出条数无效');
   const valid = new Set(report.evidence.map(e => e.id));
-  const allowedNumbers = new Set((JSON.stringify(report.evidence) + JSON.stringify(report.plan)).match(/\d+(?:\.\d+)?/g) || []);
   return claims.map(c => {
     if (!['归纳', '不确定'].includes(c.type) || typeof c.text !== 'string' || c.text.length > 400 || !Array.isArray(c.evidence_ids) || !c.evidence_ids.length || c.evidence_ids.some(id => !valid.has(id)) || boundary(c.text)) throw new Error('模型越界或引用无法追溯');
-    if ((c.text.match(/\d+(?:\.\d+)?/g) || []).some(n => !allowedNumbers.has(n))) throw new Error('模型出现证据以外的数字');
+    if (/\d/.test(c.text)) throw new Error('模型解释不得新增数字，数值事实由代码展示');
     return { type: c.type, text: c.text, evidence_ids: c.evidence_ids };
   });
 }

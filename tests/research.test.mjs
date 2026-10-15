@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { research, loadIndex, fetchJSON, enrichAI, makeHandler } from '../src/server.js';
 import { demoBars, validateBars, calculate, validateAIClaims, boundary } from '../src/engine.js';
 const now = new Date('2026-10-15T04:00:00Z');
-const base = { index:'sh000300', days:20, mode:'demo', scenario:'divergence' };
+const base = { index:'sh000300', days:20, mode:'demo', scenario:'divergence', extended:false };
 const noNetwork = () => { throw new Error('Unexpected network call'); };
 const response = data => Promise.resolve(new Response(JSON.stringify(data), { headers: { 'Content-Type':'application/json' } }));
 test('完整主链路：计划、工具、结论、原始字段与引用均可追溯', async () => {

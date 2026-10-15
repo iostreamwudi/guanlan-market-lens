@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mapLimited, collectPages, loadMarketSnapshot, loadLimitStructure, loadIndustries, loadOfficialEvents, historicalWindows, applySupplement } from '../src/supplement.js';
-import { requestModel, planWithModel, testModelConnection } from '../src/model.js';
+import { requestModel, planWithModel, testModelConnection, MODEL_TIMEOUT_MS, modelFailure } from '../src/model.js';
 import { research } from '../src/server.js';
 import { demoBars } from '../src/engine.js';
 const now = new Date('2026-10-15T08:00:00Z');
@@ -86,6 +86,20 @@ test('模型任意供应商、Coding Plan配置和未完成响应拒绝',async()
   await assert.rejects(requestModel({provider:'ark',key:'fixture-only',model:'ark-code-latest'},noNetwork),/Coding Plan/);
   await assert.rejects(testModelConnection({provider:'deepseek',key:'fixture-only',model:'test'},async()=>reply({choices:[{finish_reason:'length',message:{content:'{"ok":true}'}}]})),/未完成/);
 });
+test('模型超时、网络、HTTP及输出预算错误可区分且不泄露上游文本',async()=>{
+  assert.equal(MODEL_TIMEOUT_MS,90000);
+  const cases=[
+    {code:'timeout',fetcher:async()=>{throw new DOMException('fixture-secret upstream','TimeoutError')}},
+    {code:'network',fetcher:async()=>{throw new TypeError('fixture-secret upstream')}},
+    {code:'http',fetcher:async()=>new Response('fixture-secret upstream',{status:401})},
+    {code:'output_incomplete',fetcher:async()=>reply({choices:[{finish_reason:'length',message:{content:'{"ok":true}'}}]})}
+  ];
+  for(const c of cases){
+    await assert.rejects(testModelConnection({provider:'deepseek',key:'fixture-secret',model:'test'},c.fetcher),error=>{
+      assert.equal(modelFailure(error).code,c.code);assert.ok(!error.message.includes('fixture-secret'));return true;
+    });
+  }
+});
 test('模型规划只能选择白名单工具，不能指定任意取数能力',async()=>{
   const stub=tools=>async()=>reply({id:'plan_fixture',status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({focus:'行业',tools,reason:'需要补充行业截面'})}]}]});
   const config={provider:'openai',key:'fixture-only',model:'test'};
@@ -95,6 +109,12 @@ test('模型规划只能选择白名单工具，不能指定任意取数能力',
 test('公开访客不能未经口令使用部署者模型Key',async()=>{
   const r=await research(base,{OPENAI_API_KEY:'fixture-server-key',RESEARCH_ACCESS_TOKEN:'fixture-owner-token'},noNetwork,now);
   assert.equal(r.ai.status,'未启用');assert.ok(!JSON.stringify(r).includes('fixture-server-key'));
+});
+test('模型规划超时停止后续模型请求，明确原因并保留受控证据结果',async()=>{
+  let calls=0;
+  const r=await research({...base,extended:true,modelKey:'fixture-secret',model:'test'},{},async()=>{calls++;throw new DOMException('fixture-secret','TimeoutError')},now);
+  assert.equal(calls,1);assert.equal(r.ai.errorCode,'timeout');assert.equal(r.plan.origin,'受控规则规划');
+  assert.ok(r.evidence.length);assert.equal(r.logs[0].errorCode,'timeout');assert.ok(!JSON.stringify(r).includes('fixture-secret'));
 });
 test('分页中途失败后停止派发新请求，避免继续消耗供应商额度',async()=>{
   let count=0;

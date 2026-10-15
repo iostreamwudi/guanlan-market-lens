@@ -18,7 +18,7 @@ npm run build
 npm run validate
 ```
 
-测试目前39项通过；模型及扶摇授权成功响应的测试使用mock，不冒充真实授权集成测试。构建生成单文件Cloudflare Worker ESM；部署配置见 `.openai/hosting.json`。
+测试目前44项通过；模型及扶摇授权成功响应的测试使用mock，不冒充真实授权集成测试。构建生成单文件Cloudflare Worker ESM；部署配置见 `.openai/hosting.json`。
 
 ## 一次完整研究
 
@@ -51,7 +51,10 @@ npm run validate
 
 “连接设置”有独立的真实模型连接测试，会发送一个小型JSON请求并显示请求ID及验证时间；可能消耗少量Token。研究请求会把问题、证据摘要、少量行业/历史数据与政策摘录发送给选定供应商。凭证不包含在这些模型输入中。
 
-**本次未完成真实模型业务调用验证。用户提供的是Ark Coding Plan专用配置，官方限定用于编程工具，未把该凭证用于投研网页，也没有自动切换到会产生额外费用的标准API。需要可用于业务应用的标准API Key和已开通模型ID。** 官方说明：https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh 。
+**本次未完成标准模型业务API上线验证。用户提供的是Ark Coding Plan专用配置，官方限定用于编程工具，未把该凭证用于投研网页，也没有自动切换到会产生额外费用的标准API。需要可用于业务应用的标准API Key和已开通模型ID。** 官方说明：https://docs.volcengine.com/docs/ark/coding-plan-personal-plan-overview?lang=zh 。
+
+已完成一次真实本地开发重测：模型规划、真实公开取数和归纳均成功，data_mode=public；归纳83.259秒，通过数据模式、引用与边界校验。请求ID及失败记录见 `docs/AI_RECORD.md`。本轮将每步等待上限调为90秒、归纳预算调为4096，并增加演示误标回归拦截。测试不保存用户凭证，也没有把Coding Plan加入生产业务供应商。
+
 
 没有有效模型Key时，取数、计算、证据追溯和研究分支仍可操作，界面明确显示规则模式。
 
@@ -105,7 +108,7 @@ npm run validate
 - `src/model.js`：固定供应商端点、JSON输出、白名单规划、真实连接测试。
 - `src/server.js`：研究主链路、权限与HTTP接口。
 - `src/index.html` / `src/enhancements.js`：响应式界面与深度研究分支。
-- `tests/`：39项自动化测试；`docs/`：提交说明材料。
+- `tests/`：44项自动化测试；`docs/`：提交说明材料。
 
 ## 已知边界和未做事项
 

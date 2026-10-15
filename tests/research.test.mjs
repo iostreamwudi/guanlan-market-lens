@@ -91,10 +91,36 @@ test('模型未知引用、投资建议、凭空数字被拒绝',async()=>{
 });
 test('模型有效结构化输出成功；事实数值仍由规则产生',async()=>{
   const r=await research(base,{},noNetwork,now);
-  const fetcher=()=>response({id:'resp_test',status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({claims:[{type:'归纳',text:'宽基表现不同步，仍需补齐独立宽度证据。',evidence_ids:['E5']}]})}]}]});
+  const fetcher=()=>response({id:'resp_test',status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({data_mode:'demo',claims:[{type:'归纳',text:'基于演示数据，宽基表现不同步，仍需补齐独立宽度证据。',evidence_ids:['E5']}]})}]}]});
   const enriched=await enrichAI(r,'test','test-model',fetcher);
   assert.equal(enriched.ai.status,'已启用'); assert.equal(enriched.claims[0].type,'事实');
   assert.equal(enriched.logs.at(-1).requestId,'resp_test'); assert.ok(!JSON.stringify(enriched).includes('Bearer'));
+});
+test('实测回归：真实行情被称为演示数据时拒绝，演示模式必须明确标记',async()=>{
+  const demo=await research(base,{},noNetwork,now);
+  const real={...demo,mode:'public'};
+  const claim=text=>[{type:'归纳',text,evidence_ids:['E1']}];
+  for(const text of ['基于给定演示数据，区间重心下移。','根据模拟行情描述结构。','Using synthetic data, the structure diverges.'])assert.throws(()=>validateAIClaims(claim(text),real),/数据模式/);
+  assert.throws(()=>validateAIClaims(claim('宽基表现不同步。'),demo),/遗漏/);
+  assert.equal(validateAIClaims(claim('构造样本中存在分化。'),demo).length,1);
+  assert.equal(validateAIClaims(claim('已取行情呈现分化。'),real).length,1);
+});
+test('模型模式字段缺失或与输入冲突时保留规则结果，错误回复不展示',async()=>{
+  for(const value of [{claims:[{type:'归纳',text:'构造样本存在分化。',evidence_ids:['E1']}]},{data_mode:'public',claims:[{type:'归纳',text:'已取行情呈现分化。',evidence_ids:['E1']}]}]){
+    const r=await research(base,{},noNetwork,now),original=JSON.stringify(r.claims);
+    await enrichAI(r,'fixture-secret','test',()=>response({status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify(value)}]}]}));
+    assert.equal(r.ai.errorCode,'output_validation');assert.equal(JSON.stringify(r.claims),original);assert.ok(!JSON.stringify(r).includes('fixture-secret'));
+  }
+});
+test('归纳实际使用扩展预算并向模型明确传递真实数据模式',async()=>{
+  const r=await research(base,{},noNetwork,now);r.mode='public';
+  await enrichAI(r,'fixture-secret','test',async(url,init)=>{
+    const body=JSON.parse(init.body),input=JSON.parse(body.input);
+    assert.equal(body.max_output_tokens,4096);assert.equal(input.mode,'public');assert.match(input.dataContext,/实际取得/);
+    assert.deepEqual(body.text.format.schema.properties.data_mode.enum,['public']);
+    return response({id:'mode-pass',status:'completed',output:[{content:[{type:'output_text',text:JSON.stringify({data_mode:'public',claims:[{type:'归纳',text:'已取行情呈现分化。',evidence_ids:['E1']}]})}]}]});
+  });
+  assert.equal(r.ai.status,'已启用');assert.equal(r.ai.dataMode,'public');
 });
 test('模型不可用或拒绝时，明确标记失败保留规则结果',async()=>{
   const r=await research(base,{},noNetwork,now),original=JSON.stringify(r.claims);

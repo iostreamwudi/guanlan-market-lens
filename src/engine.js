@@ -108,9 +108,13 @@ export function buildReport({ index, days, mode, scenario, datasets, logs, quest
 export function validateAIClaims(claims, report) {
   if (!Array.isArray(claims) || claims.length < 1 || claims.length > 5) throw new Error('模型输出条数无效');
   const valid = new Set(report.evidence.map(e => e.id));
-  return claims.map(c => {
+  const syntheticLabel = /(?:演示|模拟|构造)(?:行情|数据|样本)|(?:synthetic|simulated|demo)\s+(?:data|market|samples?)/i;
+  const validated = claims.map(c => {
     if (!['归纳', '不确定'].includes(c.type) || typeof c.text !== 'string' || c.text.length > 400 || !Array.isArray(c.evidence_ids) || !c.evidence_ids.length || c.evidence_ids.some(id => !valid.has(id)) || boundary(c.text)) throw new Error('模型越界或引用无法追溯');
     if (/\d/.test(c.text)) throw new Error('模型解释不得新增数字，数值事实由代码展示');
+    if (report.mode !== 'demo' && syntheticLabel.test(c.text)) throw new Error('模型错误标记了真实数据模式');
     return { type: c.type, text: c.text, evidence_ids: c.evidence_ids };
   });
+  if (report.mode === 'demo' && !validated.some(c => syntheticLabel.test(c.text))) throw new Error('模型遗漏构造演示数据标记');
+  return validated;
 }

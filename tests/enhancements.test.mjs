@@ -73,6 +73,7 @@ test('跨时点宽度不用于更改历史区间状态，保持低置信度',asy
   const r=await research(base,{},noNetwork,now),state=r.state;
   const m=await loadMarketSnapshot('public',null,async()=>({rc:0,data:{total:4,diff:marketRows}}),now);
   applySupplement(r,{market:m});assert.equal(r.state,state);assert.equal(r.confidence,'低');assert.ok(r.warnings.some(w=>w.includes('跨交易日')));
+  assert.ok(r.claims.some(c=>c.type==='不确定'&&c.text.includes('官方政策原文当前未取得')));
 });
 test('DeepSeek结构化连接测试，供应商端点固定且凭证不输出',async()=>{
   const r=await testModelConnection({provider:'deepseek',key:'fixture-only',model:'test-model'},async(url,init)=>{

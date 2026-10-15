@@ -296,7 +296,7 @@ export function applySupplement(report, data) {
       formula: data.history.note, raw: data.history, interpretation: '只作历史特征对照，不包含未来收益、胜率或预测。' });
   }
   report.claims = report.claims.filter(c => !(c.type === '不确定' && c.text.includes('广度、资金')));
-  report.claims.push({ type: '不确定', text: '估值统一口径、资金净流入和多日宽度持续性仍不完整；已核验政策原文不代表市场影响已证实。', evidence_ids: data.market ? ['E6', 'E8'] : ['E3', 'E4'] });
+  report.claims.push({ type: '不确定', text: '估值统一口径、资金净流入和多日宽度持续性仍不完整；' + (data.events ? '已核验政策原文不代表市场影响已证实。' : '官方政策原文当前未取得，不作事件归因。'), evidence_ids: data.market ? ['E6', 'E8'] : ['E3', 'E4'] });
   report.coverage = report.quality.filter(q => q.status === 'available').length;
   const hasAlignedBreadth = data.market ? data.market.date === report.metric.date : report.mode === 'demo' && report.evidence.some(e => e.id === 'E6');
   report.confidence = report.stale || !hasAlignedBreadth ? '低' : report.coverage >= 4 ? '中' : '低';
